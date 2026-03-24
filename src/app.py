@@ -5,31 +5,64 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 import os
 import google.generativeai as genai
+from supabase import create_client, Client
 
 # ==========================================
 # 物理模型参数配置
 # ==========================================
 TAU_S = 2.0   # 状态弛豫时间常数（天）
 TAU_B = 14.0  # 基线演化时间常数（天）
-DATA_FILE = "state_logs.csv"
+
+# ==========================================
+# 数据库连接 (Supabase)
+# ==========================================
+@st.cache_resource
+def init_connection() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+try:
+    supabase = init_connection()
+except Exception as e:
+    # 如果 Secrets 未配置可能抛出异常，捕获以防应用崩溃
+    supabase = None
 
 # ==========================================
 # 数据处理与存储函数
 # ==========================================
 def load_data():
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
-        df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-        return df.sort_values('Timestamp').reset_index(drop=True)
-    else:
+    if not supabase:
+        st.error("未连接到 Supabase，请在 Streamlit Cloud 的 Secrets 中配置 SUPABASE_URL 和 SUPABASE_KEY。")
+        return pd.DataFrame(columns=['Timestamp', 'Input', 'Note'])
+    
+    try:
+        # 只查询前三列，隐去 id 列以便与原有的 DataFrame 结构保持一致
+        response = supabase.table('state_logs').select("Timestamp, Input, Note").execute()
+        if response.data:
+            df = pd.DataFrame(response.data)
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+            return df.sort_values('Timestamp').reset_index(drop=True)
+        else:
+            return pd.DataFrame(columns=['Timestamp', 'Input', 'Note'])
+    except Exception as e:
+        st.error(f"读取云端数据失败: {e}")
         return pd.DataFrame(columns=['Timestamp', 'Input', 'Note'])
 
 def save_data(timestamp, value, note):
-    df = load_data()
-    new_row = pd.DataFrame({'Timestamp': [timestamp], 'Input': [value], 'Note': [note]})
-    df = pd.concat([df, new_row], ignore_index=True)
-    df.to_csv(DATA_FILE, index=False)
-    return df
+    if not supabase:
+        return load_data()
+        
+    # 时间转换为 ISO 字符串
+    timestamp_str = timestamp.isoformat()
+    # 构造并向数据库插值，注意列名首字母大写
+    data = {"Timestamp": timestamp_str, "Input": value, "Note": note if note else ""}
+    try:
+        supabase.table('state_logs').insert(data).execute()
+    except Exception as e:
+        st.error(f"保存至云端失败: {e}")
+        
+    return load_data()
 
 # ==========================================
 # 核心动力学演化与插值算法
@@ -298,8 +331,34 @@ if not df_plot.empty:
             final_df = edited_df.sort_values('Timestamp').reset_index(drop=True)
             if "实际改变量" in final_df.columns:
                 final_df = final_df.drop(columns=["实际改变量"])
-            final_df.to_csv(DATA_FILE, index=False)
-            st.success("数据修改已保存！")
+            
+            if supabase:
+                try:
+                    # 使用一个必然成立的条件来全表删除旧记录
+                    supabase.table('state_logs').delete().neq("Input", -999).execute()
+                    
+                    if not final_df.empty:
+                        # 转成 ISO 字符串
+                        if pd.api.types.is_datetime64_any_dtype(final_df['Timestamp']):
+                            final_df['Timestamp'] = final_df['Timestamp'].apply(
+                                lambda x: x.isoformat() if pd.notnull(x) else ""
+                            )
+                        
+                        records = final_df.to_dict('records')
+                        
+                        # 清理 NaN 为 空串
+                        for r in records:
+                            if pd.isna(r.get('Note')):
+                                r['Note'] = ""
+                                
+                        supabase.table('state_logs').insert(records).execute()
+                    
+                    st.success("全部数据修改已重新同步至云端数据库！")
+                except Exception as e:
+                    st.error(f"同步至云端失败: {e}")
+            else:
+                st.error("无法保存，未连接至数据库。")
+                
             st.rerun()
             
     # 新增 AI 分析区
