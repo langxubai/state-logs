@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 import os
 
-# 这个曲线我觉得不错了，但是我还有一个问题，就是一个人真的有可能从很悲伤的-2直接跃迁到很高兴的+2吗？在心情变化很剧烈的时候人的感知是不是会失灵？
 # ==========================================
 # 物理模型参数配置
 # ==========================================
@@ -79,7 +78,17 @@ def calculate_dynamics(df):
             t_current = t_event
 
         # 2. 事件触发瞬间，状态波函数坍缩 (跃迁)
-        S_current = B_current + I
+        intended_S = B_current + I
+        delta_S = intended_S - S_current
+        
+        # 引入“感知失灵/心理惯性”机制 (Psychological Inertia)
+        # 当情绪预期跃迁幅度 >= 2 时，人往往会有“钝感”，实际跃迁幅度被打折
+        if abs(delta_S) >= 2.0:
+            # > 2.0 的部分进行阻尼衰减（这里先暂定设为 50% 的效果）
+            actual_delta = 2.0 + (abs(delta_S) - 2.0) * 0.5
+            S_current = S_current + np.sign(delta_S) * actual_delta
+        else:
+            S_current = intended_S
         
         # 记录事件点
         event_times.append(t_event)
