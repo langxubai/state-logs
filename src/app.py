@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 
 # 这个曲线我觉得不错了，但是我还有一个问题，就是一个人真的有可能从很悲伤的-2直接跃迁到很高兴的+2吗？在心情变化很剧烈的时候人的感知是不是会失灵？
@@ -65,22 +65,17 @@ def calculate_dynamics(df):
             num_steps = max(int(dt_total * 10), 2) # 每天插值10个点
             t_steps = np.linspace(0, dt_total, num_steps)
             
-            # 使用解析解计算耦合演化
-            TAU_EFF = (TAU_S * TAU_B) / (TAU_S + TAU_B)
-            K = TAU_S / (TAU_S + TAU_B)
-            delta_0 = S_current - B_current
-            
             for dt in t_steps[1:]: # 跳过第0个点（已在上一轮记录）
-                B_t = B_current + K * delta_0 * (1 - np.exp(-dt / TAU_EFF))
-                S_t = B_t + delta_0 * np.exp(-dt / TAU_EFF)
+                S_t = B_current + (S_current - B_current) * np.exp(-dt / TAU_S)
+                B_t = B_current + (S_current - B_current) * (1 - np.exp(-dt / TAU_B))
                 
                 plot_times.append(t_current + pd.Timedelta(days=dt))
                 plot_S.append(S_t)
                 plot_B.append(B_t)
                 
             # 更新到事件发生前一瞬间的物理状态
-            B_current = B_current + K * delta_0 * (1 - np.exp(-dt_total / TAU_EFF))
-            S_current = B_current + delta_0 * np.exp(-dt_total / TAU_EFF)
+            S_current = B_current + (S_current - B_current) * np.exp(-dt_total / TAU_S)
+            B_current = B_current + (S_current - B_current) * (1 - np.exp(-dt_total / TAU_B))
             t_current = t_event
 
         # 2. 事件触发瞬间，状态波函数坍缩 (跃迁)
@@ -102,14 +97,9 @@ def calculate_dynamics(df):
     if dt_to_now > 0:
         num_steps = max(int(dt_to_now * 10), 2)
         t_steps = np.linspace(0, dt_to_now, num_steps)
-        
-        TAU_EFF = (TAU_S * TAU_B) / (TAU_S + TAU_B)
-        K = TAU_S / (TAU_S + TAU_B)
-        delta_0 = S_current - B_current
-        
         for dt in t_steps[1:]:
-            B_t = B_current + K * delta_0 * (1 - np.exp(-dt / TAU_EFF))
-            S_t = B_t + delta_0 * np.exp(-dt / TAU_EFF)
+            S_t = B_current + (S_current - B_current) * np.exp(-dt / TAU_S)
+            B_t = B_current + (S_current - B_current) * (1 - np.exp(-dt / TAU_B))
             plot_times.append(t_current + pd.Timedelta(days=dt))
             plot_S.append(S_t)
             plot_B.append(B_t)
@@ -130,9 +120,21 @@ df = load_data()
 with st.sidebar:
     st.header("📝 记录当前状态")
     
-    record_date = st.date_input("日期", datetime.now())
-    record_time = st.time_input("时间", datetime.now())
-    event_timestamp = pd.Timestamp(datetime.combine(record_date, record_time))
+    # 获取东八区当前时间（兼容本地和云端部署的 UTC 时差问题）
+    tz_zh = timezone(timedelta(hours=8))
+    now = datetime.now(tz_zh)
+    
+    use_now = st.toggle("🕒 同步最新时间", value=True, help="关闭此项即可手动修改时间，用于补填历史状态")
+    
+    if use_now:
+        # 当开启同步时，框体禁用，防止误触，保证获取到你点击保存那一刻的最新时间
+        st.date_input("日期", value=now.date(), disabled=True)
+        st.time_input("时间", value=now.time(), disabled=True)
+        event_timestamp = pd.Timestamp(now).tz_localize(None) # 剥离时区信息以兼容原有存储
+    else:
+        record_date = st.date_input("日期", value=now.date())
+        record_time = st.time_input("时间", value=now.time())
+        event_timestamp = pd.Timestamp(datetime.combine(record_date, record_time))
     
     input_value = st.select_slider(
         "你的直觉感受是？",
