@@ -35,7 +35,9 @@ def save_data(timestamp, value, note):
 # ==========================================
 def calculate_dynamics(df):
     if df.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        df_augmented = df.copy()
+        df_augmented['实际改变量'] = []
+        return pd.DataFrame(), pd.DataFrame(), df_augmented
 
     # 存储用于画连续曲线的密集数据点
     plot_times = []
@@ -46,6 +48,8 @@ def calculate_dynamics(df):
     event_times = []
     event_S = []
     event_Notes = []
+    
+    actual_jumps = [] # 记录每次事件的实际改变量
 
     # 初始状态
     t_current = df['Timestamp'].iloc[0]
@@ -86,9 +90,13 @@ def calculate_dynamics(df):
         if abs(delta_S) >= 2.0:
             # > 2.0 的部分进行阻尼衰减（这里先暂定设为 50% 的效果）
             actual_delta = 2.0 + (abs(delta_S) - 2.0) * 0.5
-            S_current = S_current + np.sign(delta_S) * actual_delta
+            actual_jump = np.sign(delta_S) * actual_delta
+            S_current = S_current + actual_jump
         else:
+            actual_jump = delta_S
             S_current = intended_S
+            
+        actual_jumps.append(round(actual_jump, 2))
         
         # 记录事件点
         event_times.append(t_event)
@@ -115,7 +123,11 @@ def calculate_dynamics(df):
 
     df_plot = pd.DataFrame({'Time': plot_times, 'State': plot_S, 'Baseline': plot_B})
     df_events = pd.DataFrame({'Time': event_times, 'State': event_S, 'Note': event_Notes})
-    return df_plot, df_events
+    
+    # 将实际改变量附加到原始 df 返回
+    df_augmented = df.copy()
+    df_augmented['实际改变量'] = actual_jumps
+    return df_plot, df_events, df_augmented
 
 # ==========================================
 # Streamlit 前端界面
@@ -160,7 +172,7 @@ with st.sidebar:
         st.rerun()
 
 # 主界面：可视化区
-df_plot, df_events = calculate_dynamics(df)
+df_plot, df_events, df_augmented = calculate_dynamics(df)
 
 if not df_plot.empty:
     st.markdown("### 📊 实时状态看板")
@@ -217,13 +229,16 @@ if not df_plot.empty:
     # 显示近期记录表格
     with st.expander("📝 数据管理与修正 (直接在表格中修改或删除)"):
         edited_df = st.data_editor(
-            df.sort_values('Timestamp', ascending=False),
+            df_augmented.sort_values('Timestamp', ascending=False),
+            disabled=["实际改变量"],
             num_rows="dynamic",
             use_container_width=True,
             key="data_editor"
         )
         if st.button("💾 保存修改的表格"):
             final_df = edited_df.sort_values('Timestamp').reset_index(drop=True)
+            if "实际改变量" in final_df.columns:
+                final_df = final_df.drop(columns=["实际改变量"])
             final_df.to_csv(DATA_FILE, index=False)
             st.success("数据修改已保存！")
             st.rerun()
