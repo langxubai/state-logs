@@ -172,6 +172,19 @@ st.title("🌊 个人状态双时间尺度演化模型")
 df = load_data()
 
 # 侧边栏：数据输入区
+try:
+    @st.fragment(run_every="1s")
+    def render_live_clock(tz):
+        live_now = datetime.now(tz)
+        st.date_input("日期", value=live_now.date(), disabled=True, key="live_date")
+        st.time_input("时间", value=live_now.time(), disabled=True, key="live_time")
+except AttributeError:
+    # 兼容低版本的 Streamlit
+    def render_live_clock(tz):
+        live_now = datetime.now(tz)
+        st.date_input("日期", value=live_now.date(), disabled=True, key="live_date")
+        st.time_input("时间", value=live_now.time(), disabled=True, key="live_time")
+
 with st.sidebar:
     st.header("📝 记录当前状态")
     
@@ -182,9 +195,8 @@ with st.sidebar:
     use_now = st.toggle("🕒 同步最新时间", value=True, help="关闭此项即可手动修改时间，用于补填历史状态")
     
     if use_now:
-        # 当开启同步时，框体禁用，防止误触，保证获取到你点击保存那一刻的最新时间
-        st.date_input("日期", value=now.date(), disabled=True)
-        st.time_input("时间", value=now.time(), disabled=True)
+        # 当开启同步时，利用 fragment 渲染每秒自动更新的实时时钟框体
+        render_live_clock(tz_zh)
         event_timestamp = pd.Timestamp(now).tz_localize(None) # 剥离时区信息以兼容原有存储
         
         # 记录同步模式下的最新时间，作为切入手动模式时的初始值
