@@ -152,9 +152,19 @@ with st.sidebar:
         st.date_input("日期", value=now.date(), disabled=True)
         st.time_input("时间", value=now.time(), disabled=True)
         event_timestamp = pd.Timestamp(now).tz_localize(None) # 剥离时区信息以兼容原有存储
+        
+        # 记录同步模式下的最新时间，作为切入手动模式时的初始值
+        st.session_state.manual_date_init = now.date()
+        st.session_state.manual_time_init = now.replace(second=0, microsecond=0).time()
     else:
-        record_date = st.date_input("日期", value=now.date())
-        record_time = st.time_input("时间", value=now.time())
+        # 兜底：确保手动模式的初始变量存在
+        if "manual_date_init" not in st.session_state:
+            st.session_state.manual_date_init = now.date()
+            st.session_state.manual_time_init = now.replace(second=0, microsecond=0).time()
+            
+        # 手动模式下，传入固定不变的初始值，可防止其它操作（如输入原因）导致时间被强制重置
+        record_date = st.date_input("日期", value=st.session_state.manual_date_init)
+        record_time = st.time_input("时间", value=st.session_state.manual_time_init)
         event_timestamp = pd.Timestamp(datetime.combine(record_date, record_time))
     
     input_value = st.select_slider(
