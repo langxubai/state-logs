@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# User generated data
+# 忽略个人的状态记录数据，避免把隐私数据推送到公开仓库
+state_logs.csv
+
+# Streamlit secrets (if you use them later)
+.streamlit/secrets.toml
