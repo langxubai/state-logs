@@ -217,8 +217,13 @@ with st.sidebar:
 
     st.divider()
     st.header("💡 AI 智能分析")
-    # 判断是否配置了 secrets
-    default_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
+    # 判断是否配置了 secrets 或 环境变量
+    default_key = ""
+    if "GEMINI_API_KEY" in st.secrets:
+        default_key = st.secrets["GEMINI_API_KEY"]
+    elif "GEMINI_API_KEY" in os.environ:
+        default_key = os.environ["GEMINI_API_KEY"]
+        
     gemini_key = st.text_input("Gemini API Key", value=default_key, type="password", help="在此输入您的 Gemini API 密钥以启用 AI 数据洞察")
 
 # 主界面：可视化区
