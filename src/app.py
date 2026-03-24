@@ -224,7 +224,11 @@ with st.sidebar:
     elif "GEMINI_API_KEY" in os.environ:
         default_key = os.environ["GEMINI_API_KEY"]
         
-    gemini_key = st.text_input("Gemini API Key", value=default_key, type="password", help="在此输入您的 Gemini API 密钥以启用 AI 数据洞察")
+    if default_key:
+        st.success("✅ Gemini API 已在后台配置成功")
+        gemini_key = default_key
+    else:
+        gemini_key = st.text_input("Gemini API Key", type="password", help="后台未检测到配置，请手动输入以启用洞察功能")
 
 # 主界面：可视化区
 df_plot, df_events, df_augmented = calculate_dynamics(df)
