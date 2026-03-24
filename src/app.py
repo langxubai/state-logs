@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timezone, timedelta
 import os
+import google.generativeai as genai
 
 # ==========================================
 # 物理模型参数配置
@@ -129,6 +130,39 @@ def calculate_dynamics(df):
     df_augmented['实际改变量'] = actual_jumps
     return df_plot, df_events, df_augmented
 
+def generate_ai_insights(df, api_key):
+    if df.empty or len(df) < 3:
+        return "数据量太少，需要至少记录 3 次状态才能进行有意义的分析。"
+    try:
+        genai.configure(api_key=api_key)
+        # 使用 Flash 模型进行快速推理
+        model = genai.GenerativeModel('gemini-2.5-flash', system_instruction="你是一个心理与行为模式分析专家。")
+        
+        # 提取有备注的有效数据
+        valid_df = df[df['Note'].notna() & (df['Note'] != '')].copy()
+        if len(valid_df) < 2:
+            return "带备注的数据太少。请在打卡时多写一些发生的事情，AI 才能寻找规律。"
+            
+        data_text = "历史状态记录如下:\n"
+        for _, row in valid_df.iterrows():
+            time_str = row['Timestamp'].strftime('%Y-%m-%d %H:%M')
+            data_text += f"- 时间: {time_str}, 输入分值: {row['Input']:>+}, 备注: {row['Note']}\n"
+        
+        prompt = f"""
+基于以下时间戳、用户状态跃迁分值（范围 -2 到 +2）以及发生的事件备注，请分析数据并总结出：
+1. 什么时间或什么类型的事件能够显著让用户状态变好（分值 >= 1）？
+2. 什么会导致状态变差（分值 <= -1）？
+3. 是否有其他潜在的周期性或行为模式规律？
+
+请简明扼要，像一位温暖、敏锐且专业的心理顾问一样给出你的洞察总结，并用漂亮的 Markdown 格式输出。
+
+{data_text}
+"""
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"😟 AI 分析时出错，请检查 API Key 或网络：\n\n`{str(e)}`"
+
 # ==========================================
 # Streamlit 前端界面
 # ==========================================
@@ -180,6 +214,12 @@ with st.sidebar:
         save_data(event_timestamp, input_value, note)
         st.success("记录成功！状态已更新。")
         st.rerun()
+
+    st.divider()
+    st.header("💡 AI 智能分析")
+    # 判断是否配置了 secrets
+    default_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
+    gemini_key = st.text_input("Gemini API Key", value=default_key, type="password", help="在此输入您的 Gemini API 密钥以启用 AI 数据洞察")
 
 # 主界面：可视化区
 df_plot, df_events, df_augmented = calculate_dynamics(df)
@@ -252,6 +292,17 @@ if not df_plot.empty:
             final_df.to_csv(DATA_FILE, index=False)
             st.success("数据修改已保存！")
             st.rerun()
+            
+    # 新增 AI 分析区
+    st.markdown("---")
+    st.markdown("### 🤖 状态模式 AI 分析")
+    if not gemini_key:
+        st.info("👈 请在左侧侧边栏填入 Gemini API Key 开启 AI 分析。")
+    else:
+        if st.button("🚀 生成 AI 状态洞察报告", type="primary"):
+            with st.spinner("Gemini 正在深度分析您的状态演化规律..."):
+                insights = generate_ai_insights(df, gemini_key)
+                st.markdown(insights)
         
 else:
     st.info("👈 目前还没有数据，请在左侧侧边栏记录你的第一次状态！")
