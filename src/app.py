@@ -42,7 +42,7 @@ def load_data():
         response = supabase.table('state_logs').select("Timestamp, Input, Note").execute()
         if response.data:
             df = pd.DataFrame(response.data)
-            df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'], utc=True)
             return df.sort_values('Timestamp').reset_index(drop=True)
         else:
             return pd.DataFrame(columns=['Timestamp', 'Input', 'Note'])
@@ -68,7 +68,7 @@ def save_data(timestamp, value, note):
 # ==========================================
 # 核心动力学演化与插值算法
 # ==========================================
-def calculate_dynamics(df):
+def calculate_dynamics(df, current_tz):
     if df.empty:
         df_augmented = df.copy()
         df_augmented['实际改变量'] = []
@@ -207,7 +207,6 @@ st.title("🌊 个人状态双时间尺度演化模型")
 df = load_data()
 
 # 侧边栏：数据输入区
-# 侧边栏：数据输入区
 with st.sidebar:
     st.header("🌍 时区设置")
     # 提供常见时区列表，默认选中上海/北京时间
@@ -306,9 +305,11 @@ with st.sidebar:
 # 主界面：可视化区
 # 将从数据库读取到的全局数据转换到当前选择的本地时区，保证图表和表格展示一致
 if not df.empty and pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
-    if df['Timestamp'].dt.tz is None:
-        df['Timestamp'] = df['Timestamp'].dt.tz_localize('UTC')
     df['Timestamp'] = df['Timestamp'].dt.tz_convert(local_tz)
+# if not df.empty and pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
+#     if df['Timestamp'].dt.tz is None:
+#         df['Timestamp'] = df['Timestamp'].dt.tz_localize('UTC')
+#     df['Timestamp'] = df['Timestamp'].dt.tz_convert(local_tz)
 
 # 主界面：可视化区 (传入 local_tz)
 df_plot, df_events, df_augmented = calculate_dynamics(df, local_tz)
