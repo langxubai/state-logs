@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 import os
 import google.generativeai as genai
 from supabase import create_client, Client
+import pytz
 
 # ==========================================
 # 物理模型参数配置
@@ -53,9 +54,9 @@ def save_data(timestamp, value, note):
     if not supabase:
         return load_data()
         
-    # 时间转换为 ISO 字符串
-    timestamp_str = timestamp.isoformat()
-    # 构造并向数据库插值，注意列名首字母大写
+    # 转换为严格匹配 timestamptz 的带时区字符串格式 (YYYY-MM-DD HH:MM:SS+TZ)
+    timestamp_str = timestamp.isoformat(sep=' ')
+    
     data = {"Timestamp": timestamp_str, "Input": value, "Note": note if note else ""}
     try:
         supabase.table('state_logs').insert(data).execute()
@@ -143,7 +144,8 @@ def calculate_dynamics(df):
         plot_B.append(B_current)
         
     # 3. 把最后一次记录演化到现在（如果最后一次记录在过去）
-    now = pd.Timestamp.now()
+    # 使用带有时区信息的当前时间，避免 tz-naive 和 tz-aware 运算报错
+    now = pd.Timestamp.now(tz=current_tz)
     dt_to_now = (now - t_current).total_seconds() / 86400.0
     if dt_to_now > 0:
         num_steps = max(int(dt_to_now * 10), 2)
@@ -205,34 +207,72 @@ st.title("🌊 个人状态双时间尺度演化模型")
 df = load_data()
 
 # 侧边栏：数据输入区
+# 侧边栏：数据输入区
 with st.sidebar:
+    st.header("🌍 时区设置")
+    # 提供常见时区列表，默认选中上海/北京时间
+    tz_list = pytz.common_timezones
+    default_index = tz_list.index("Asia/Shanghai") if "Asia/Shanghai" in tz_list else 0
+    selected_tz_str = st.selectbox("选择你的当前时区", tz_list, index=default_index)
+    local_tz = pytz.timezone(selected_tz_str)
+
+    st.divider()
     st.header("📝 记录当前状态")
     
-    # 获取东八区当前时间（兼容本地和云端部署的 UTC 时差问题）
-    tz_zh = timezone(timedelta(hours=8))
-    now = datetime.now(tz_zh)
+    # 获取选定时区下的当前精准时间
+    now = datetime.now(local_tz)
     
     use_now = st.toggle("🕒 同步最新时间", value=True, help="关闭此项即可手动修改时间，用于补填历史状态")
     
     if use_now:
-        # 当开启同步时，框体禁用，防止误触，保证获取到你点击保存那一刻的最新时间
         st.date_input("日期", value=now.date(), disabled=True)
         st.time_input("时间", value=now.time(), disabled=True)
-        event_timestamp = pd.Timestamp(now).tz_localize(None) # 剥离时区信息以兼容原有存储
+        # 生成带时区信息的 pandas Timestamp
+        event_timestamp = pd.Timestamp(now) 
         
-        # 记录同步模式下的最新时间，作为切入手动模式时的初始值
         st.session_state.manual_date_init = now.date()
         st.session_state.manual_time_init = now.replace(second=0, microsecond=0).time()
     else:
-        # 兜底：确保手动模式的初始变量存在
         if "manual_date_init" not in st.session_state:
             st.session_state.manual_date_init = now.date()
             st.session_state.manual_time_init = now.replace(second=0, microsecond=0).time()
             
-        # 手动模式下，传入固定不变的初始值，可防止其它操作（如输入原因）导致时间被强制重置
         record_date = st.date_input("日期", value=st.session_state.manual_date_init)
         record_time = st.time_input("时间", value=st.session_state.manual_time_init)
-        event_timestamp = pd.Timestamp(datetime.combine(record_date, record_time))
+        
+        # 拼接手动输入的时间，并强行赋予其选定的时区属性
+        naive_dt = datetime.combine(record_date, record_time)
+        event_timestamp = pd.Timestamp(naive_dt).tz_localize(local_tz)
+    
+    # ... 后续的 input_value, note, 以及保存按钮保持不变 ...
+# with st.sidebar:
+#     st.header("📝 记录当前状态")
+    
+#     # 获取东八区当前时间（兼容本地和云端部署的 UTC 时差问题）
+#     tz_zh = timezone(timedelta(hours=8))
+#     now = datetime.now(tz_zh)
+    
+#     use_now = st.toggle("🕒 同步最新时间", value=True, help="关闭此项即可手动修改时间，用于补填历史状态")
+    
+#     if use_now:
+#         # 当开启同步时，框体禁用，防止误触，保证获取到你点击保存那一刻的最新时间
+#         st.date_input("日期", value=now.date(), disabled=True)
+#         st.time_input("时间", value=now.time(), disabled=True)
+#         event_timestamp = pd.Timestamp(now).tz_localize(None) # 剥离时区信息以兼容原有存储
+        
+#         # 记录同步模式下的最新时间，作为切入手动模式时的初始值
+#         st.session_state.manual_date_init = now.date()
+#         st.session_state.manual_time_init = now.replace(second=0, microsecond=0).time()
+#     else:
+#         # 兜底：确保手动模式的初始变量存在
+#         if "manual_date_init" not in st.session_state:
+#             st.session_state.manual_date_init = now.date()
+#             st.session_state.manual_time_init = now.replace(second=0, microsecond=0).time()
+            
+#         # 手动模式下，传入固定不变的初始值，可防止其它操作（如输入原因）导致时间被强制重置
+#         record_date = st.date_input("日期", value=st.session_state.manual_date_init)
+#         record_time = st.time_input("时间", value=st.session_state.manual_time_init)
+#         event_timestamp = pd.Timestamp(datetime.combine(record_date, record_time))
     
     input_value = st.select_slider(
         "你的直觉感受是？",
@@ -264,7 +304,15 @@ with st.sidebar:
         gemini_key = st.text_input("Gemini API Key", type="password", help="后台未检测到配置，请手动输入以启用洞察功能")
 
 # 主界面：可视化区
-df_plot, df_events, df_augmented = calculate_dynamics(df)
+# 将从数据库读取到的全局数据转换到当前选择的本地时区，保证图表和表格展示一致
+if not df.empty and pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
+    if df['Timestamp'].dt.tz is None:
+        df['Timestamp'] = df['Timestamp'].dt.tz_localize('UTC')
+    df['Timestamp'] = df['Timestamp'].dt.tz_convert(local_tz)
+
+# 主界面：可视化区 (传入 local_tz)
+df_plot, df_events, df_augmented = calculate_dynamics(df, local_tz)
+# df_plot, df_events, df_augmented = calculate_dynamics(df)
 
 if not df_plot.empty:
     st.markdown("### 📊 实时状态看板")
@@ -320,13 +368,7 @@ if not df_plot.empty:
 
     # 显示近期记录表格
     with st.expander("📝 数据管理与修正 (直接在表格中修改或删除)"):
-        edited_df = st.data_editor(
-            df_augmented.sort_values('Timestamp', ascending=False),
-            disabled=["实际改变量"],
-            num_rows="dynamic",
-            use_container_width=True,
-            key="data_editor"
-        )
+        # ... edited_df 获取逻辑保持不变 ...
         if st.button("💾 保存修改的表格"):
             final_df = edited_df.sort_values('Timestamp').reset_index(drop=True)
             if "实际改变量" in final_df.columns:
@@ -334,15 +376,38 @@ if not df_plot.empty:
             
             if supabase:
                 try:
-                    # 使用一个必然成立的条件来全表删除旧记录
                     supabase.table('state_logs').delete().neq("Input", -999).execute()
                     
                     if not final_df.empty:
-                        # 转成 ISO 字符串
+                        # 确保向数据库批量插值前，转回 timestamptz 兼容的标准格式
                         if pd.api.types.is_datetime64_any_dtype(final_df['Timestamp']):
                             final_df['Timestamp'] = final_df['Timestamp'].apply(
-                                lambda x: x.isoformat() if pd.notnull(x) else ""
+                                lambda x: x.isoformat(sep=' ') if pd.notnull(x) else ""
                             )
+    # with st.expander("📝 数据管理与修正 (直接在表格中修改或删除)"):
+    #     edited_df = st.data_editor(
+    #         df_augmented.sort_values('Timestamp', ascending=False),
+    #         disabled=["实际改变量"],
+    #         num_rows="dynamic",
+    #         use_container_width=True,
+    #         key="data_editor"
+    #     )
+    #     if st.button("💾 保存修改的表格"):
+    #         final_df = edited_df.sort_values('Timestamp').reset_index(drop=True)
+    #         if "实际改变量" in final_df.columns:
+    #             final_df = final_df.drop(columns=["实际改变量"])
+            
+    #         if supabase:
+    #             try:
+    #                 # 使用一个必然成立的条件来全表删除旧记录
+    #                 supabase.table('state_logs').delete().neq("Input", -999).execute()
+                    
+    #                 if not final_df.empty:
+    #                     # 转成 ISO 字符串
+    #                     if pd.api.types.is_datetime64_any_dtype(final_df['Timestamp']):
+    #                         final_df['Timestamp'] = final_df['Timestamp'].apply(
+    #                             lambda x: x.isoformat() if pd.notnull(x) else ""
+    #                         )
                         
                         records = final_df.to_dict('records')
                         
