@@ -42,7 +42,7 @@ def load_data():
         response = supabase.table('state_logs').select("Timestamp, Input, Note").execute()
         if response.data:
             df = pd.DataFrame(response.data)
-            df['Timestamp'] = pd.to_datetime(df['Timestamp'], utc=True)
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='mixed', utc=True)
             return df.sort_values('Timestamp').reset_index(drop=True)
         else:
             return pd.DataFrame(columns=['Timestamp', 'Input', 'Note'])
