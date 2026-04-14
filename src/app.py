@@ -65,6 +65,30 @@ def save_data(timestamp, value, note):
         
     return load_data()
 
+def get_latest_ai_insight():
+    if not supabase:
+        return None, None
+    try:
+        response = supabase.table('ai_insights').select('*').order('created_at', desc=True).limit(1).execute()
+        if response.data:
+            dt = pd.to_datetime(response.data[0]['created_at'])
+            return response.data[0]['insight_text'], dt
+    except Exception:
+        pass
+    return None, None
+
+def save_ai_insight(insight_text, dt_now):
+    if not supabase:
+        return
+    try:
+        data = {
+            "created_at": dt_now.isoformat(sep=' '),
+            "insight_text": insight_text
+        }
+        supabase.table('ai_insights').insert(data).execute()
+    except Exception as e:
+        st.error(f"保存 AI 分析结果失败: {e}")
+
 # ==========================================
 # 核心动力学演化与插值算法
 # ==========================================
@@ -431,13 +455,37 @@ if not df_plot.empty:
     # 新增 AI 分析区
     st.markdown("---")
     st.markdown("### 🤖 状态模式 AI 分析")
+    
+    # 尝试加载上一次的结果
+    last_insight, last_dt = get_latest_ai_insight()
+    
+    if last_insight:
+        # 将时间转换为本地时区显示
+        if hasattr(last_dt, 'tz_convert') and last_dt.tzinfo is not None:
+            dt_str = last_dt.tz_convert(local_tz).strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            dt_str = last_dt.strftime('%Y-%m-%d %H:%M:%S')
+            
+        st.info(f"🕒 上次分析更新时间：{dt_str}")
+        st.markdown(last_insight)
+        
     if not gemini_key:
-        st.info("👈 请在左侧侧边栏填入 Gemini API Key 开启 AI 分析。")
+        if not last_insight:
+            st.info("👈 请在左侧侧边栏填入 Gemini API Key 开启 AI 分析。")
     else:
-        if st.button("🚀 生成 AI 状态洞察报告", type="primary"):
-            with st.spinner("Gemini 正在深度分析您的状态演化规律..."):
-                insights = generate_ai_insights(df, gemini_key)
-                st.markdown(insights)
+        button_label = "🔄 重新分析并更新洞察报告" if last_insight else "🚀 生成 AI 状态洞察报告"
+        if st.button(button_label, type="primary"):
+            with st.spinner("Gemini 正在深度分析您的状态演化规律... (这可能需要几秒钟)"):
+                new_insights = generate_ai_insights(df, gemini_key)
+                # 根据 generate_ai_insights 的返回值开头判断是否成功
+                if not new_insights.startswith("😟") and not new_insights.startswith("数据量太少") and not new_insights.startswith("带备注的数据太少"):
+                    now_tz = pd.Timestamp.now(tz=local_tz)
+                    save_ai_insight(new_insights, now_tz)
+                    st.success("✅ 分析报告已成功生成并更新！")
+                    st.rerun() # 重新运行以展示刚写入的新结果
+                else:
+                    # 如果出错了或数据不满足条件，则直接显示
+                    st.markdown(new_insights)
         
 else:
     st.info("👈 目前还没有数据，请在左侧侧边栏记录你的第一次状态！")
