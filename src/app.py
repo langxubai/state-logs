@@ -7,6 +7,7 @@ import os
 import google.generativeai as genai
 from supabase import create_client, Client
 import pytz
+from openai import OpenAI
 
 # ==========================================
 # 物理模型参数配置
@@ -189,37 +190,58 @@ def calculate_dynamics(df, current_tz):
     df_augmented['实际改变量'] = actual_jumps
     return df_plot, df_events, df_augmented
 
-def generate_ai_insights(df, api_key):
+def generate_ai_insights(df, api_key, provider="Google Gemini"):
     if df.empty or len(df) < 3:
         return "数据量太少，需要至少记录 3 次状态才能进行有意义的分析。"
+    
+    # 提取有备注的有效数据
+    valid_df = df[df['Note'].notna() & (df['Note'] != '')].copy()
+    if len(valid_df) < 2:
+        return "带备注的数据太少。请在打卡时多写一些发生的事情，AI 才能寻找规律。"
+        
+    data_text = "历史状态记录如下:\n"
+    for _, row in valid_df.iterrows():
+        time_str = row['Timestamp'].strftime('%Y-%m-%d %H:%M')
+        data_text += f"- 时间: {time_str}, 输入分值: {row['Input']:>+}, 备注: {row['Note']}\n"
+    
+    prompt = f"""
+        基于以下时间戳、用户状态跃迁分值（范围 -2 到 +2）以及发生的事件备注，请分析数据并总结出：
+        1. 什么时间或什么类型的事件能够显著让用户状态变好（跃迁变化分值 >= 2）？
+        2. 什么会导致状态变差（跃迁变化分值 <= -2）？
+        3. 不同的诱因事件对状态的可能影响的时间有多久（或者问情绪或状态的半衰期有多久）？和什么因素有关？
+        4. 是否有其他潜在的状态的周期性（可能是一天、一周、一个月、一个季度、一年等）或行为模式规律？
+
+        请简明扼要，像一位敏锐且专业的心理分析师一样给出你的洞察总结，并用漂亮的 Markdown 格式输出。
+
+        {data_text}
+    """
+
     try:
-        genai.configure(api_key=api_key)
-        # 使用 Flash 模型进行快速推理
-        model = genai.GenerativeModel('gemini-2.5-flash', system_instruction="你是一个心理与行为模式分析专家。")
-        
-        # 提取有备注的有效数据
-        valid_df = df[df['Note'].notna() & (df['Note'] != '')].copy()
-        if len(valid_df) < 2:
-            return "带备注的数据太少。请在打卡时多写一些发生的事情，AI 才能寻找规律。"
-            
-        data_text = "历史状态记录如下:\n"
-        for _, row in valid_df.iterrows():
-            time_str = row['Timestamp'].strftime('%Y-%m-%d %H:%M')
-            data_text += f"- 时间: {time_str}, 输入分值: {row['Input']:>+}, 备注: {row['Note']}\n"
-        
-        prompt = f"""
-            基于以下时间戳、用户状态跃迁分值（范围 -2 到 +2）以及发生的事件备注，请分析数据并总结出：
-            1. 什么时间或什么类型的事件能够显著让用户状态变好（跃迁变化分值 >= 2）？
-            2. 什么会导致状态变差（跃迁变化分值 <= -2）？
-            3. 不同的诱因事件对状态的可能影响的时间有多久（或者问情绪或状态的半衰期有多久）？和什么因素有关？
-            4. 是否有其他潜在的状态的周期性（可能是一天、一周、一个月、一个季度、一年等）或行为模式规律？
-
-            请简明扼要，像一位敏锐且专业的心理分析师一样给出你的洞察总结，并用漂亮的 Markdown 格式输出。
-
-            {data_text}
-        """
-        response = model.generate_content(prompt)
-        return response.text
+        if provider == "Google Gemini":
+            genai.configure(api_key=api_key)
+            # 使用 Flash 模型进行快速推理
+            model = genai.GenerativeModel('gemini-2.5-flash', system_instruction="你是一个心理与行为模式分析专家。")
+            response = model.generate_content(prompt)
+            return response.text
+        elif provider == "NVIDIA NIM":
+            client = OpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=api_key
+            )
+            # 默认使用 llama-3.1-8b-instruct，后续可由用户研究后修改
+            completion = client.chat.completions.create(
+                model="meta/llama-3.1-8b-instruct",
+                messages=[
+                    {"role": "system", "content": "你是一个心理与行为模式分析专家。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                top_p=0.7,
+                max_tokens=1024,
+            )
+            return completion.choices[0].message.content
+        else:
+            return f"未支持的 AI 提供商: {provider}"
     except Exception as e:
         return f"😟 AI 分析时出错，请检查 API Key 或网络：\n\n`{str(e)}`"
 
@@ -314,18 +336,25 @@ with st.sidebar:
 
     st.divider()
     st.header("💡 AI 智能分析")
-    # 判断是否配置了 secrets 或 环境变量
-    default_key = ""
-    if "GEMINI_API_KEY" in st.secrets:
-        default_key = st.secrets["GEMINI_API_KEY"]
-    elif "GEMINI_API_KEY" in os.environ:
-        default_key = os.environ["GEMINI_API_KEY"]
-        
-    if default_key:
-        st.success("✅ Gemini API 已在后台配置成功")
-        gemini_key = default_key
+    
+    # AI 提供商选择
+    ai_provider = st.radio("选择 AI 提供商", ["Google Gemini", "NVIDIA NIM"], index=0)
+    
+    # 动态检测和显示 API Key 配置状态
+    if ai_provider == "Google Gemini":
+        gemini_key_env = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        if gemini_key_env:
+            st.success("✅ Gemini API 已在后台配置")
+            active_api_key = gemini_key_env
+        else:
+            active_api_key = st.text_input("Gemini API Key", type="password", help="请手动输入以启用分析功能")
     else:
-        gemini_key = st.text_input("Gemini API Key", type="password", help="后台未检测到配置，请手动输入以启用洞察功能")
+        nvidia_key_env = st.secrets.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_API_KEY")
+        if nvidia_key_env:
+            st.success("✅ NVIDIA API 已在后台配置")
+            active_api_key = nvidia_key_env
+        else:
+            active_api_key = st.text_input("NVIDIA API Key", type="password", help="请手动输入以启用分析功能")
 
 # 主界面：可视化区
 # 将从数据库读取到的全局数据转换到当前选择的本地时区，保证图表和表格展示一致
@@ -469,14 +498,14 @@ if not df_plot.empty:
         st.info(f"🕒 上次分析更新时间：{dt_str}")
         st.markdown(last_insight)
         
-    if not gemini_key:
+    if not active_api_key:
         if not last_insight:
-            st.info("👈 请在左侧侧边栏填入 Gemini API Key 开启 AI 分析。")
+            st.info(f"👈 请在左侧侧边栏填入 {ai_provider} API Key 开启 AI 分析。")
     else:
         button_label = "🔄 重新分析并更新洞察报告" if last_insight else "🚀 生成 AI 状态洞察报告"
         if st.button(button_label, type="primary"):
-            with st.spinner("Gemini 正在深度分析您的状态演化规律... (这可能需要几秒钟)"):
-                new_insights = generate_ai_insights(df, gemini_key)
+            with st.spinner(f"{ai_provider} 正在深度分析您的状态演化规律..."):
+                new_insights = generate_ai_insights(df, active_api_key, ai_provider)
                 # 根据 generate_ai_insights 的返回值开头判断是否成功
                 if not new_insights.startswith("😟") and not new_insights.startswith("数据量太少") and not new_insights.startswith("带备注的数据太少"):
                     now_tz = pd.Timestamp.now(tz=local_tz)
