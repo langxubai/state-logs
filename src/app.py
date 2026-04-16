@@ -230,12 +230,12 @@ def generate_ai_insights(df, api_key, provider="Google Gemini"):
             )
             # 默认使用 llama-3.1-8b-instruct，后续可由用户研究后修改
             completion = client.chat.completions.create(
-                model="meta/llama-3.1-8b-instruct",
+                model="deepseek-ai/deepseek-v3.2",
                 messages=[
                     {"role": "system", "content": "你是一个心理与行为模式分析专家。"},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.2,
+                temperature=1.0,
                 top_p=0.7,
                 max_tokens=1024,
             )
