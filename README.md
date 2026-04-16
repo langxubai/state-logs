@@ -51,3 +51,4 @@ pip install streamlit pandas numpy plotly
 1. 对不同的事件类型设置不同的 $\tau_s$。
 2. 根据用户输入，动态调整 $\tau_s$ 和 $\tau_b$。
 这些功能虽然可能微调大模型得到的更好，但是直接使用没有微调过的大模型其实可能就够了。
+3. 可以自己选择api里面提供的ai model。
